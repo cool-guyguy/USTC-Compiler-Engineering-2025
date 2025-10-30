@@ -60,6 +60,44 @@ Value* CminusfBuilder::visit(ASTNum &node) {
 Value* CminusfBuilder::visit(ASTVarDeclaration &node) {
     // TODO: This function is empty now.
     // Add some code here.
+    Type *var_type;
+    if (node.type == TYPE_INT) {
+        var_type = INT32_T;
+    } else {
+        var_type = FLOAT_T;
+    }
+
+    // 处理数组声明
+    if (node.num != nullptr) {
+        // 数组类型
+        auto array_size = node.num->i_val;
+        auto array_type = ArrayType::get(var_type, array_size);
+        
+        if (scope.in_global()) {
+            // 全局数组
+            auto initializer = ConstantZero::get(array_type, module.get());
+            auto global_var = GlobalVariable::create(node.id, module.get(), 
+                                                   array_type, false, initializer);
+            scope.push(node.id, global_var);
+        } else {
+            // 局部数组
+            auto local_var = builder->create_alloca(array_type);
+            scope.push(node.id, local_var);
+        }
+    } else {
+        // 普通变量
+        if (scope.in_global()) {
+            // 全局变量
+            auto initializer = ConstantZero::get(var_type, module.get());
+            auto global_var = GlobalVariable::create(node.id, module.get(), 
+                                                   var_type, false, initializer);
+            scope.push(node.id, global_var);
+        } else {
+            // 局部变量
+            auto local_var = builder->create_alloca(var_type);
+            scope.push(node.id, local_var);
+        }
+    }
     return nullptr;
 }
 
@@ -126,20 +164,34 @@ Value* CminusfBuilder::visit(ASTParam &node) {
     return nullptr;
 }
 
-Value* CminusfBuilder::visit(ASTCompoundStmt &node) {
+Value *CminusfBuilder::visit(ASTCompoundStmt &node) {
     // TODO: This function is not complete.
     // You may need to add some code here
-    // to deal with complex statements. 
-    
+    // to deal with complex statements.
+
+    // 进入新的作用域
+    if (!context.pre_enter_scope) {
+        scope.enter();
+    } else {
+        context.pre_enter_scope = false;
+    }
+
+    // 处理局部声明
     for (auto &decl : node.local_declarations) {
         decl->accept(*this);
     }
 
+    // 处理语句列表
     for (auto &stmt : node.statement_list) {
         stmt->accept(*this);
-        if (builder->get_insert_block()->get_terminator() == nullptr)
+        // 如果当前基本块已经终止（如return、break、continue），则停止执行后续语句
+        if (builder->get_insert_block()->get_terminator() != nullptr) {
             break;
+        }
     }
+
+    // 退出作用域
+    scope.exit();
     return nullptr;
 }
 
@@ -189,9 +241,41 @@ Value* CminusfBuilder::visit(ASTSelectionStmt &node) {
     return nullptr;
 }
 
-Value* CminusfBuilder::visit(ASTIterationStmt &node) {
+Value *CminusfBuilder::visit(ASTIterationStmt &node) {
     // TODO: This function is empty now.
     // Add some code here.
+
+    // 创建循环的基本块
+    auto *condBB = BasicBlock::create(module.get(), "loop_cond", context.func);
+    auto *bodyBB = BasicBlock::create(module.get(), "loop_body", context.func);
+    auto *endBB = BasicBlock::create(module.get(), "loop_end", context.func);
+
+    // 跳转到条件判断块
+    builder->create_br(condBB);
+
+    // 条件判断块
+    builder->set_insert_point(condBB);
+    auto *cond_val = node.expression->accept(*this);
+    Value *bool_cond;
+    if (cond_val->get_type()->is_integer_type()) {
+        bool_cond = builder->create_icmp_ne(cond_val, CONST_INT(0));
+    } else {
+        bool_cond = builder->create_fcmp_ne(cond_val, CONST_FP(0.));
+    }
+    builder->create_cond_br(bool_cond, bodyBB, endBB);
+
+    // 循环体块
+    builder->set_insert_point(bodyBB);
+    node.statement->accept(*this);
+
+    // 如果循环体没有终止，跳回条件判断
+    if (builder->get_insert_block()->get_terminator() == nullptr) {
+        builder->create_br(condBB);
+    }
+
+    // 循环结束块
+    builder->set_insert_point(endBB);
+
     return nullptr;
 }
 
@@ -301,10 +385,74 @@ Value* CminusfBuilder::visit(ASTAssignExpression &node) {
     return expr_result;
 }
 
-Value* CminusfBuilder::visit(ASTSimpleExpression &node) {
+Value *CminusfBuilder::visit(ASTSimpleExpression &node) {
     // TODO: This function is empty now.
     // Add some code here.
-    return nullptr;
+
+    // 处理左侧加法表达式
+    auto *left_val = node.additive_expression_l->accept(*this);
+
+    // 如果没有比较操作符，直接返回左侧值
+    if (node.additive_expression_r == nullptr) {
+        return left_val;
+    }
+
+    // 处理右侧加法表达式
+    auto *right_val = node.additive_expression_r->accept(*this);
+
+    // 类型提升
+    bool is_int = promote(&*builder, &left_val, &right_val);
+
+    Value *cmp_result = nullptr;
+
+    // 根据操作符创建比较指令
+    switch (node.op) {
+    case OP_LE: // <=
+        if (is_int) {
+            cmp_result = builder->create_icmp_le(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_le(left_val, right_val);
+        }
+        break;
+    case OP_LT: // <
+        if (is_int) {
+            cmp_result = builder->create_icmp_lt(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_lt(left_val, right_val);
+        }
+        break;
+    case OP_GT: // >
+        if (is_int) {
+            cmp_result = builder->create_icmp_gt(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_gt(left_val, right_val);
+        }
+        break;
+    case OP_GE: // >=
+        if (is_int) {
+            cmp_result = builder->create_icmp_ge(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_ge(left_val, right_val);
+        }
+        break;
+    case OP_EQ: // ==
+        if (is_int) {
+            cmp_result = builder->create_icmp_eq(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_eq(left_val, right_val);
+        }
+        break;
+    case OP_NEQ: //- !=
+        if (is_int) {
+            cmp_result = builder->create_icmp_ne(left_val, right_val);
+        } else {
+            cmp_result = builder->create_fcmp_ne(left_val, right_val);
+        }
+        break;
+    }
+
+    // 将比较结果（i1类型）转换为i32类型以便统一处理
+    return builder->create_zext(cmp_result, INT32_T);
 }
 
 Value* CminusfBuilder::visit(ASTAdditiveExpression &node) {
