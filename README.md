@@ -1,21 +1,147 @@
-# 简介
+#95分版本未通过案例分析
+//查看 complex3 测试用例
+cat tests/2-ir-gen/autogen/testcases/lv3/complex3.cminus
+cat tests/2-ir-gen/autogen/testcases/lv3/complex3.cminus
+//查看 complex4 测试用例  
+cat tests/2-ir-gen/autogen/testcases/lv3/complex4.cminus
+//查看期望的输出
+cat tests/2-ir-gen/autogen/answers/lv3/complex3.out
+cat tests/2-ir-gen/autogen/answers/lv3/complex4.out
 
-本仓库为 USTC 编译工程 2025 的课程实验仓库。在本学期的编译实验中，你们将构建一个从词法分析器开始到后端代码生成的JIANMU编译器。
 
-你们需要 fork 此 repo 到自己的仓库下，随后在自己的仓库中完成实验。
+#输出如下
+int gcd(int u, int v) {
+    if (v == 0)
+        return u;
+    else
+        return gcd(v, u - u / v * v);
+}
 
+void main(void) {
+    int x;
+    int y;
+    int temp;
+    x = input();
+    y = input();
+    if (x < y) {
+        temp = x;
+        x = y;
+        y = temp;
+    }
+    temp = gcd(x, y);
+    output(temp);
+    return;
+}
+float get(float a[], int x, int y, int row) { return a[x * row + y]; }
 
-## 测试脚本使用方法
+float abs(float x) {
+    if (x > 0)
+        return x;
+    else
+        return 0 - x;
+}
 
-eval_lab2.sh: 
-    没有参数，直接运行即可，结果会生成在 eval_result 下
+float isZero(float t) { return abs(t) < 0.000001; }
 
-如何编译：
-``` bash
-# 如果你想安装到usr/local/bin
-cmake -B build && cmake --install build
-# 否则 执行以下指令
-cmake -B build && cmake --build build
-```
+int gauss(float vars[], float equ[], int var) {
+    int i;
+    int j;
+    int k;
+    int varone;
+    int maxr;
+    int col;
+    float temp;
+    varone = var + 1;
 
-无论哪种命令，你都可以在 build/ 下找到 cminusfc 等可执行文件
+    i = 0;
+    while (i < var) {
+        vars[i] = 0;
+        i = i + 1;
+    }
+
+    col = 0;
+    k = 0;
+    while (k < var) {
+        maxr = k;
+        i = k + 1;
+        while (i < var) {
+            if (abs(get(equ, i, col, varone)) > abs(get(equ, maxr, col, varone)))
+                maxr = i;
+            i = i + 1;
+        }
+        if (maxr != k) {
+            j = k;
+
+            while (j < varone) {
+                temp = get(equ, k, j, varone);
+                equ[k * varone + j] = get(equ, maxr, j, varone);
+                equ[maxr * varone + j] = temp;
+                j = j + 1;
+            }
+        }
+        if (isZero(get(equ, k, col, varone))) {
+            k = k - 1;
+        } else {
+            i = k + 1;
+            while (i < var) {
+                if (1 - isZero(get(equ, i, col, varone))) {
+                    temp = get(equ, i, col, varone) / get(equ, k, col, varone);
+                    j = col;
+                    while (j < varone) {
+                        equ[i * varone + j] = equ[i * varone + j] - get(equ, k, j, varone) * temp;
+                        j = j + 1;
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        k = k + 1;
+        col = col + 1;
+    }
+
+    i = var - 1;
+    while (i >= 0) {
+        temp = get(equ, i, var, varone);
+        j = i + 1;
+        while (j < var) {
+            if (1 - isZero(get(equ, i, j, varone)))
+                temp = temp - get(equ, i, j, varone) * vars[j];
+            j = j + 1;
+        }
+        vars[i] = temp / get(equ, i, i, varone);
+        i = i - 1;
+    }
+    return 0;
+}
+
+void main(void) {
+    int num;
+    float vars[3];
+    float equ[12];
+    equ[0] = 1;
+    equ[1] = 2;
+    equ[2] = 1;
+    equ[3] = 1;
+    equ[1 * 4 + 0] = 2;
+    equ[1 * 4 + 1] = 3;
+    equ[1 * 4 + 2] = 4;
+    equ[1 * 4 + 3] = 3;
+    equ[2 * 4 + 0] = 1;
+    equ[2 * 4 + 1] = 1;
+    equ[2 * 4 + 2] = 0 - 2;
+    equ[2 * 4 + 3] = 0;
+    gauss(vars, equ, 3);
+    num = 0;
+    while (num < 3) {
+        outputFloat(vars[num]);
+        num = num + 1;
+    }
+}
+39
+1.000000
+-0.200000
+0.400000
+
+通过修复了函数调用时的参数类型转换问题，特别是数组参数的传递处理。
+
+解决了 complex3 (GCD递归) 和 complex4 (高斯消元) 中的函数调用问题，让测试从95分提升到100分。

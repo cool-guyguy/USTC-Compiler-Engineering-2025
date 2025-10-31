@@ -138,14 +138,19 @@ Value *CminusfBuilder::visit(ASTFunDeclaration &node) {
         scope.push(args[i]->get_name(), param_i);
     }
     node.compound_stmt->accept(*this);
-    if (builder->get_insert_block()->get_terminator() == nullptr) {
-        if (context.func->get_return_type()->is_void_type())
+
+    // 确保函数有返回语句 - 更严格的检查
+    if (builder->get_insert_block() &&
+        !builder->get_insert_block()->is_terminated()) {
+        if (context.func->get_return_type()->is_void_type()) {
             builder->create_void_ret();
-        else if (context.func->get_return_type()->is_float_type())
+        } else if (context.func->get_return_type()->is_float_type()) {
             builder->create_ret(CONST_FP(0.));
-        else
+        } else {
             builder->create_ret(CONST_INT(0));
+        }
     }
+
     scope.exit();
     return nullptr;
 }
@@ -172,12 +177,14 @@ Value *CminusfBuilder::visit(ASTParam &node) {
 }
 
 Value *CminusfBuilder::visit(ASTCompoundStmt &node) {
-    bool need_exit_scope = !context.pre_enter_scope;
+    bool need_enter = true;
     if (context.pre_enter_scope) {
+        // 函数体的第一个 compound-stmt：作用域已在 FunDecl 中 enter 过
         context.pre_enter_scope = false;
-    } else {
-        scope.enter();
+        need_enter = false;
     }
+    if (need_enter)
+        scope.enter();
 
     for (auto &decl : node.local_declarations) {
         decl->accept(*this);
@@ -185,14 +192,12 @@ Value *CminusfBuilder::visit(ASTCompoundStmt &node) {
 
     for (auto &stmt : node.statement_list) {
         stmt->accept(*this);
-        if (builder->get_insert_block()->is_terminated()) {
+        if (builder->get_insert_block()->is_terminated())
             break;
-        }
     }
 
-    if (need_exit_scope) {
+    if (need_enter)
         scope.exit();
-    }
     return nullptr;
 }
 
@@ -280,10 +285,14 @@ Value *CminusfBuilder::visit(ASTReturnStmt &node) {
         auto *fun_ret_type =
             context.func->get_function_type()->get_return_type();
         auto *ret_val = node.expression->accept(*this);
+
+        // 更精确的类型转换判断
         if (fun_ret_type != ret_val->get_type()) {
-            if (fun_ret_type->is_integer_type()) {
+            if (fun_ret_type->is_integer_type() &&
+                ret_val->get_type()->is_float_type()) {
                 ret_val = builder->create_fptosi(ret_val, INT32_T);
-            } else {
+            } else if (fun_ret_type->is_float_type() &&
+                       ret_val->get_type()->is_integer_type()) {
                 ret_val = builder->create_sitofp(ret_val, FLOAT_T);
             }
         }
@@ -498,11 +507,23 @@ Value *CminusfBuilder::visit(ASTTerm &node) {
 Value *CminusfBuilder::visit(ASTCall &node) {
     auto *func = dynamic_cast<Function *>(scope.find(node.id));
     std::vector<Value *> args;
-    auto param_type = func->get_function_type()->param_begin();
+    auto param_types = func->get_function_type()->param_begin();
+
     for (auto &arg : node.args) {
         auto *arg_val = arg->accept(*this);
-        if (!arg_val->get_type()->is_pointer_type() &&
-            *param_type != arg_val->get_type()) {
+
+        // 处理数组参数和指针类型转换
+        if (arg_val->get_type()->is_pointer_type() &&
+            !(*param_types)->is_pointer_type()) {
+            // 解引用数组参数：如果实参是指针但形参不是指针，需要加载值
+            arg_val = builder->create_load(arg_val);
+        } else if (!arg_val->get_type()->is_pointer_type() &&
+                   (*param_types)->is_pointer_type()) {
+            // 获取数组地址：如果实参不是指针但形参是指针，需要获取地址
+            // 这里不需要特殊处理，因为数组变量已经是地址
+        } else if (!arg_val->get_type()->is_pointer_type() &&
+                   *param_types != arg_val->get_type()) {
+            // 基本类型转换
             if (arg_val->get_type()->is_integer_type()) {
                 arg_val = builder->create_sitofp(arg_val, FLOAT_T);
             } else {
@@ -510,7 +531,7 @@ Value *CminusfBuilder::visit(ASTCall &node) {
             }
         }
         args.push_back(arg_val);
-        param_type++;
+        param_types++;
     }
 
     return builder->create_call(static_cast<Function *>(func), args);
